@@ -11,7 +11,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 SCAM_WORDS = "withdraw claim reward casino crypto mrbeast promo special cryptocurrency vip bonus redeem receive coin deleted wallet celebrate register transferred promotion chance money winner successful block explorer deposit".split()
-trigger_level = 30
+trigger_level = 120
 log_channel = 
 HASH_FILE = "scam_hashes.txt"
 
@@ -69,7 +69,7 @@ async def run_ocr(message, images):
                 match_list = ", ".join(f"{w} (x{c})" for w, c in matches.items())
                 analysis_embed = discord.Embed(title="Scam Message Detected", color=0xf7b200)
                 analysis_embed.description = f"Deleted message in {message.channel.mention} by {message.author.mention}"
-                analysis_embed.add_field(name="Confidence", value=f"{confidence:.1%} after {i+1} image{'s' if i else ''}", inline=True)
+                analysis_embed.add_field(name="Likelihood coefficient", value=f"{confidence} after {i+1} image{'s' if i else ''}", inline=True)
                 analysis_embed.add_field(name="Matches", value=match_list, inline=False)
                 return True, analysis_embed
 
@@ -85,6 +85,10 @@ async def on_message(message):
 
     try: await message.author.timeout(timedelta(seconds=60), reason="Blocking mrbeast scam")
     except: pass
+
+    try: await message.forward(bot.get_channel(log_channel))
+    except: pass
+
     try: await message.delete()
     except: pass
 
