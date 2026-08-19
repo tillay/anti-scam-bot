@@ -1,4 +1,4 @@
-import discord, os, pytesseract, io, aiohttp, hashlib
+import discord, os, pytesseract, io, aiohttp, hashlib, asyncio
 from Levenshtein import distance
 from datetime import timedelta
 from dotenv import load_dotenv
@@ -26,70 +26,71 @@ def save_hashes(new):
     with open(HASH_FILE, "a") as f:
         for h in new: f.write(h + "\n")
 
-async def run_ocr(message, images):
+async def download_all(images):
+    async def fetch(att):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(att.url) as resp:
+                return await resp.read()
+    return await asyncio.gather(*[fetch(a) for a in images])
+
+async def run_ocr(message, image_data):
     global known_hashes
     image_hashes, matches, all_text, scam_images = [], {}, "", set()
-    async with aiohttp.ClientSession() as session:
-        for i, att in enumerate(images):
-            async with session.get(att.url) as resp:
-                data = await resp.read()
-            h = hashlib.sha256(data).hexdigest()
+    for i, data in enumerate(image_data):
+        h = hashlib.sha256(data).hexdigest()
 
-            image_hashes.append(h)
-            if h in known_hashes:
-                embed = discord.Embed(title="Recognized Scam Hash", color=0xd42c03)
-                embed.description = f"Deleted message in {message.channel.mention} by {message.author.mention}"
-                return True, embed, i + 1, scam_images
+        image_hashes.append(h)
+        if h in known_hashes:
+            embed = discord.Embed(title="Recognized Scam Hash", color=0xd42c03)
+            embed.description = f"Deleted message in {message.channel.mention} by {message.author.mention}"
+            return True, embed, i + 1, scam_images
 
-            try: text = pytesseract.image_to_string(Image.open(io.BytesIO(data))).strip()
-            except pytesseract.TesseractError: continue
-            except OSError: exit("Please install tesseract-ocr with your package manager")
-            if not text: continue
+        try: text = pytesseract.image_to_string(Image.open(io.BytesIO(data))).strip()
+        except pytesseract.TesseractError: continue
+        except OSError: exit("Please install tesseract-ocr with your package manager")
+        if not text: continue
 
-            all_text += text + " "
-            img_matches = {}
-            for sw in SCAM_WORDS:
-                c = sum(1 for w in text.lower().split() if distance(w, sw) <= max(0, (len(sw) - 4) // 3))
-                if c: img_matches[sw] = c
+        all_text += text + " "
+        img_matches = {}
+        for sw in SCAM_WORDS:
+            c = sum(1 for w in text.lower().split() if distance(w, sw) <= max(0, (len(sw) - 4) // 3))
+            if c: img_matches[sw] = c
 
-            if len(img_matches) >= 3:
-                scam_images.add(h)
+        if len(img_matches) >= 3:
+            scam_images.add(h)
 
-            matches = {}
-            for sw in SCAM_WORDS:
-                c = sum(1 for w in all_text.lower().split() if distance(w, sw) <= max(0, (len(sw) - 4) // 3))
-                if c: matches[sw] = c
+        matches = {}
+        for sw in SCAM_WORDS:
+            c = sum(1 for w in all_text.lower().split() if distance(w, sw) <= max(0, (len(sw) - 4) // 3))
+            if c: matches[sw] = c
 
-            if len(matches) < 3: continue
+        if len(matches) < 3: continue
 
-            confidence = len(matches) * sum(matches.values())
+        confidence = len(matches) * sum(matches.values())
 
-            if confidence >= trigger_level:
-                save_hashes([h for h in scam_images if h not in known_hashes])
-                match_list = ", ".join(f"{w} (x{c})" for w, c in matches.items())
-                analysis_embed = discord.Embed(title="Scam Message Detected", color=0xf7b200)
-                analysis_embed.description = f"Deleted message in {message.channel.mention} by {message.author.mention}"
-                analysis_embed.add_field(name="Likelihood coefficient", value=f"{confidence} after {i+1} image{'s' if i else ''}", inline=True)
-                analysis_embed.add_field(name="Matches", value=match_list, inline=False)
-                return True, analysis_embed, i + 1, scam_images
+        if confidence >= trigger_level:
+            save_hashes([h for h in scam_images if h not in known_hashes])
+            match_list = ", ".join(f"{w} (x{c})" for w, c in matches.items())
+            analysis_embed = discord.Embed(title="Scam Message Detected", color=0xf7b200)
+            analysis_embed.description = f"Deleted message in {message.channel.mention} by {message.author.mention}"
+            analysis_embed.add_field(name="Likelihood coefficient", value=f"{confidence} after {i+1} image{'s' if i else ''}", inline=True)
+            analysis_embed.add_field(name="Matches", value=match_list, inline=False)
+            return True, analysis_embed, i + 1, scam_images
 
-    return False, None, len(images), set()
+    return False, None, len(image_data), set()
 
-async def cache_remaining(images, start_idx, scam_images):
-    async with aiohttp.ClientSession() as session:
-        for att in images[start_idx:]:
-            async with session.get(att.url) as resp:
-                data = await resp.read()
-            h = hashlib.sha256(data).hexdigest()
-            if h in known_hashes: continue
-            try: text = pytesseract.image_to_string(Image.open(io.BytesIO(data))).strip()
-            except: continue
-            if not text: continue
-            img_matches = {}
-            for sw in SCAM_WORDS:
-                c = sum(1 for w in text.lower().split() if distance(w, sw) <= max(0, (len(sw) - 4) // 3))
-                if c: img_matches[sw] = c
-            if len(img_matches) >= 3: scam_images.add(h)
+async def cache_remaining(image_data, start_idx, scam_images):
+    for data in image_data[start_idx:]:
+        h = hashlib.sha256(data).hexdigest()
+        if h in known_hashes: continue
+        try: text = pytesseract.image_to_string(Image.open(io.BytesIO(data))).strip()
+        except: continue
+        if not text: continue
+        img_matches = {}
+        for sw in SCAM_WORDS:
+            c = sum(1 for w in text.lower().split() if distance(w, sw) <= max(0, (len(sw) - 4) // 3))
+            if c: img_matches[sw] = c
+        if len(img_matches) >= 3: scam_images.add(h)
     save_hashes([h for h in scam_images if h not in known_hashes])
 
 @bot.event
@@ -97,7 +98,8 @@ async def on_message(message):
     images = [a for a in message.attachments if a.content_type and a.content_type.startswith("image/")]
     if not images or message.author.bot: return
 
-    is_scam_msg, analysis_embed, processed_count, scam_images = await run_ocr(message, images)
+    image_data = await download_all(images)
+    is_scam_msg, analysis_embed, processed_count, scam_images = await run_ocr(message, image_data)
     if not is_scam_msg: return
 
     try: await message.author.timeout(timedelta(seconds=60), reason="Blocking mrbeast scam")
@@ -114,7 +116,7 @@ async def on_message(message):
     await bot.get_channel(log_channel).send(embed=analysis_embed)
 
     if processed_count < len(images):
-        await cache_remaining(images, processed_count, scam_images)
+        await cache_remaining(image_data, processed_count, scam_images)
 
 @bot.event
 async def on_ready():
