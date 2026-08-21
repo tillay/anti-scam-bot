@@ -45,7 +45,7 @@ async def run_ocr(message, image_data):
             embed.description = f"Deleted message in {message.channel.mention} by {message.author.mention}"
             return True, embed, i + 1, scam_images
 
-        try: text = pytesseract.image_to_string(Image.open(io.BytesIO(data))).strip()
+        text = await asyncio.to_thread(pytesseract.image_to_string, Image.open(io.BytesIO(data)))
         except pytesseract.TesseractError: continue
         except OSError: exit("Please install tesseract-ocr with your package manager")
         if not text: continue
